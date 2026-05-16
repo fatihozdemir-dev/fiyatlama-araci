@@ -11,12 +11,12 @@ st.set_page_config(
 def init_session_state():
     if "funding_sources" not in st.session_state:
         st.session_state.funding_sources = [
-            {"name": "Sukuk", "amount": 50000000, "annual_rate": 12.5, "frequency": "Yillik"},
-            {"name": "Banka Kredisi", "amount": 30000000, "annual_rate": 15.0, "frequency": "Aylik"},
-            {"name": "VDMK", "amount": 20000000, "annual_rate": 11.0, "frequency": "Yillik"},
+            {"name": "Sukuk", "amount": 50000000, "currency": "USD", "fx_rate": 1.0, "annual_rate": 12.5},
+            {"name": "Banka Kredisi", "amount": 30000000, "currency": "USD", "fx_rate": 1.0, "annual_rate": 15.0},
+            {"name": "VDMK", "amount": 20000000, "currency": "USD", "fx_rate": 1.0, "annual_rate": 11.0},
         ]
-    if "opex_margin" not in st.session_state:
-        st.session_state.opex_margin = 2.0
+    if "opex_monthly_margin" not in st.session_state:
+        st.session_state.opex_monthly_margin = 0.17
     if "strategy" not in st.session_state:
         st.session_state.strategy = {
             "sales_target": 140000000,
@@ -45,16 +45,24 @@ def init_session_state():
 
 init_session_state()
 
+def get_usd_amount(amount, currency, fx_rate):
+    if currency == "TL":
+        return amount / fx_rate if fx_rate > 0 else 0
+    return amount
+
 def calculate_wacc(sources):
-    total = sum(s["amount"] for s in sources)
-    if total == 0:
+    total_usd = sum(get_usd_amount(s["amount"], s["currency"], s["fx_rate"]) for s in sources)
+    if total_usd == 0:
         return 0.0, 0.0
-    wacc_annual = sum((s["amount"] / total) * s["annual_rate"] for s in sources)
+    wacc_annual = sum(
+        (get_usd_amount(s["amount"], s["currency"], s["fx_rate"]) / total_usd) * s["annual_rate"]
+        for s in sources
+    )
     wacc_monthly = wacc_annual / 12
     return round(wacc_annual, 4), round(wacc_monthly, 4)
 
-def calculate_base_cost(wacc_annual, opex_margin):
-    return round(wacc_annual + opex_margin, 4)
+def calculate_base_cost(wacc_annual, opex_annual):
+    return round(wacc_annual + opex_annual, 4)
 
 def get_macro_bps(mode):
     mapping = {"Agresif Buyume": -75, "Dengeli": 0, "Defansif / Karlilik Odakli": 100}
@@ -129,20 +137,28 @@ tabs = st.tabs([
     "Onaylanan Islemler"
 ])
 
+# ══════════════════════════════════════════════
+# TAB 1: FINANS EKIBI
+# ══════════════════════════════════════════════
 with tabs[0]:
     st.header("Finans Ekibi - Borclanma Kaynaklari & WACC")
-    st.caption("Sirketin fon kaynaklarini girin. Sistem WACC'i otomatik hesaplar.")
+    st.caption("Sirketin fon kaynaklarini girin. TL borclanmalar icin kur bilgisi girin.")
 
     with st.expander("Yeni Kaynak Ekle", expanded=False):
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         new_name = c1.text_input("Kaynak Adi", value="Ortak Borcu")
-        new_amount = c2.number_input("Tutar ($)", min_value=0, value=10000000, step=1000000)
-        new_rate = c3.number_input("Yillik Maliyet (%)", min_value=0.0, max_value=100.0, value=13.0, step=0.1)
-        new_freq = c4.selectbox("Odeme Sikligi", ["Aylik", "Yillik", "Ceyreklik"])
+        new_currency = c2.selectbox("Para Birimi", ["USD", "TL"])
+        new_amount = c3.number_input("Tutar", min_value=0, value=10000000, step=1000000)
+        new_fx = c4.number_input("Kur (1 USD = ? TL)", min_value=0.01, value=32.0, step=0.1,
+                                  disabled=(new_currency == "USD"))
+        new_rate = c5.number_input("Yillik Maliyet (%)", min_value=0.0, max_value=200.0, value=13.0, step=0.1)
         if st.button("Ekle", type="primary"):
             st.session_state.funding_sources.append({
-                "name": new_name, "amount": new_amount,
-                "annual_rate": new_rate, "frequency": new_freq
+                "name": new_name,
+                "amount": new_amount,
+                "currency": new_currency,
+                "fx_rate": new_fx if new_currency == "TL" else 1.0,
+                "annual_rate": new_rate,
             })
             st.rerun()
 
@@ -150,44 +166,79 @@ with tabs[0]:
     sources = st.session_state.funding_sources
     updated_sources = []
     for i, src in enumerate(sources):
-        c1, c2, c3, c4, c5 = st.columns([2, 2, 2, 2, 1])
+        c1, c2, c3, c4, c5, c6 = st.columns([2, 1.2, 2, 1.5, 1.8, 0.8])
         name = c1.text_input("Ad", value=src["name"], key=f"fn_{i}")
-        amount = c2.number_input("Tutar ($)", value=src["amount"], step=1000000, key=f"fa_{i}")
-        rate = c3.number_input("Yillik Maliyet (%)", value=src["annual_rate"], step=0.1, key=f"fr_{i}")
-        freq_opts = ["Aylik", "Yillik", "Ceyreklik"]
-        freq_val = src["frequency"] if src["frequency"] in freq_opts else "Aylik"
-        freq = c4.selectbox("Siklik", freq_opts, index=freq_opts.index(freq_val), key=f"ff_{i}")
-        delete = c5.button("Sil", key=f"fd_{i}")
+        currency = c2.selectbox("Birim", ["USD", "TL"], index=0 if src["currency"] == "USD" else 1, key=f"fc_{i}")
+        amount = c3.number_input("Tutar", value=src["amount"], step=1000000, key=f"fa_{i}")
+        fx_rate = c4.number_input("Kur (TL/USD)", value=src.get("fx_rate", 1.0), step=0.1, key=f"fx_{i}",
+                                   disabled=(currency == "USD"))
+        rate = c5.number_input("Yillik Maliyet (%)", value=src["annual_rate"], step=0.1, key=f"fr_{i}")
+        delete = c6.button("Sil", key=f"fd_{i}")
         if not delete:
-            updated_sources.append({"name": name, "amount": amount, "annual_rate": rate, "frequency": freq})
+            updated_sources.append({
+                "name": name,
+                "amount": amount,
+                "currency": currency,
+                "fx_rate": fx_rate if currency == "TL" else 1.0,
+                "annual_rate": rate,
+            })
     st.session_state.funding_sources = updated_sources
 
-    st.divider()
-    st.subheader("OPEX Marji")
-    st.session_state.opex_margin = st.slider(
-        "Operasyonel Gider Marji (%)", min_value=1.0, max_value=5.0,
-        value=st.session_state.opex_margin, step=0.1
-    )
+    # Base Kaynak Maliyeti (WACC) - OPEX'ten once
+    if st.session_state.funding_sources:
+        wacc_a_pre, wacc_m_pre = calculate_wacc(st.session_state.funding_sources)
+        total_usd_pre = sum(get_usd_amount(s["amount"], s["currency"], s["fx_rate"]) for s in st.session_state.funding_sources)
 
+        st.divider()
+        st.subheader("Base Kaynak Maliyeti (OPEX Haric)")
+        bm1, bm2, bm3 = st.columns(3)
+        bm1.metric("Toplam Fon (USD)", f"${total_usd_pre:,.0f}")
+        bm2.metric("Base Yillik Kaynak Maliyeti (WACC)", f"%{wacc_a_pre:.2f}")
+        bm3.metric("Base Aylik Kaynak Maliyeti", f"%{wacc_m_pre:.2f}")
+
+        # Kaynak tablosu
+        df_src = []
+        for s in st.session_state.funding_sources:
+            usd_val = get_usd_amount(s["amount"], s["currency"], s["fx_rate"])
+            weight = (usd_val / total_usd_pre * 100) if total_usd_pre > 0 else 0
+            df_src.append({
+                "Kaynak": s["name"],
+                "Tutar (Orijinal)": f"{s['currency']} {s['amount']:,.0f}",
+                "Kur": f"{s['fx_rate']:.2f}" if s["currency"] == "TL" else "-",
+                "USD Karsiligi": f"${usd_val:,.0f}",
+                "Yillik Maliyet (%)": s["annual_rate"],
+                "Agirlik (%)": round(weight, 2),
+                "Agirlikli Maliyet (%)": round(weight / 100 * s["annual_rate"], 4),
+            })
+        st.dataframe(pd.DataFrame(df_src), use_container_width=True)
+
+    st.divider()
+    st.subheader("OPEX Aylik Marji")
+    st.session_state.opex_monthly_margin = st.number_input(
+        "Aylik OPEX Marji (%)",
+        min_value=0.0, max_value=5.0,
+        value=st.session_state.opex_monthly_margin,
+        step=0.01,
+        help="Aylik girilen deger 12 ile carpilarak yillik OPEX marjina donusturulur."
+    )
+    opex_annual = round(st.session_state.opex_monthly_margin * 12, 4)
+    st.info(f"Aylik OPEX: **%{st.session_state.opex_monthly_margin:.2f}** → Yillik OPEX: **%{opex_annual:.2f}**")
+
+    # Hesaplama Sonuclari
     wacc_a, wacc_m = calculate_wacc(st.session_state.funding_sources)
-    base_cost = calculate_base_cost(wacc_a, st.session_state.opex_margin)
-    total_funds = sum(s["amount"] for s in st.session_state.funding_sources)
+    base_cost_annual = calculate_base_cost(wacc_a, opex_annual)
+    base_cost_monthly = round(base_cost_annual / 12, 4)
 
     st.divider()
     st.subheader("Hesaplama Sonuclari")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Toplam Fon", f"${total_funds:,.0f}")
-    m2.metric("WACC (Yillik)", f"%{wacc_a:.2f}")
-    m3.metric("WACC (Aylik)", f"%{wacc_m:.2f}")
-    m4.metric("Base Cost (WACC+OPEX)", f"%{base_cost:.2f}")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("WACC (Yillik)", f"%{wacc_a:.2f}")
+    m2.metric("Base Cost Yillik (WACC+OPEX)", f"%{base_cost_annual:.2f}", delta=f"+OPEX %{opex_annual:.2f}")
+    m3.metric("Base Cost Aylik (WACC+OPEX)", f"%{base_cost_monthly:.2f}")
 
-    if st.session_state.funding_sources:
-        df_src = pd.DataFrame(st.session_state.funding_sources)
-        df_src["Agirlik (%)"] = (df_src["amount"] / total_funds * 100).round(2)
-        df_src["Agirlikli Maliyet (%)"] = (df_src["Agirlik (%)"] / 100 * df_src["annual_rate"]).round(4)
-        df_src.columns = ["Kaynak", "Tutar ($)", "Yillik Maliyet (%)", "Siklik", "Agirlik (%)", "Agirlikli Maliyet (%)"]
-        st.dataframe(df_src, use_container_width=True)
-
+# ══════════════════════════════════════════════
+# TAB 2: STRATEJI EKIBI
+# ══════════════════════════════════════════════
 with tabs[1]:
     st.header("Strateji Ekibi - KPI Hedefleri & Makro Mod")
     s = st.session_state.strategy
@@ -222,11 +273,15 @@ with tabs[1]:
     st.session_state.strategy = s
     st.success(f"Makro Mod: {s['macro_mode']} | Satis Hedefi: ${s['sales_target']:,.0f} | Ort. Vade: {s['avg_maturity_days']} gun")
 
+# ══════════════════════════════════════════════
+# TAB 3: DEGERLENDIRME & FIYATLAMA
+# ══════════════════════════════════════════════
 with tabs[2]:
     st.header("Degerlendirme Ekibi - Musteri Fiyatlama & Ic Onay")
 
+    opex_annual_t3 = round(st.session_state.opex_monthly_margin * 12, 4)
     wacc_a, wacc_m = calculate_wacc(st.session_state.funding_sources)
-    base_cost = calculate_base_cost(wacc_a, st.session_state.opex_margin)
+    base_cost_annual = calculate_base_cost(wacc_a, opex_annual_t3)
     s = st.session_state.strategy
     w = st.session_state.weights
     macro_bps = get_macro_bps(s["macro_mode"])
@@ -257,28 +312,28 @@ with tabs[2]:
     target_margin = s["gross_profit_pct_new"] if customer_type == "Yeni Musteri" else s["gross_profit_pct_repeat"]
     risk_pct = bps_to_pct(risk_bps)
     macro_pct = bps_to_pct(macro_bps)
-    system_rate = round(base_cost + target_margin + risk_pct + macro_pct, 4)
+    system_rate = round(base_cost_annual + target_margin + risk_pct + macro_pct, 4)
 
     with col_result:
         st.subheader("Ic Onay Ekrani - Fiyatlama Selalesi")
 
         waterfall_data = [
-            ("WACC (Agirlikli Sermaye Maliyeti)", wacc_a, "maliyet"),
-            ("OPEX Marji", st.session_state.opex_margin, "maliyet"),
-            ("Hedef Brut Kar Marji", target_margin, "hedef"),
-            ("Risk BPS Ayarlamalari", risk_pct, "risk"),
-            ("Makro Strateji Ayari", macro_pct, "makro"),
+            ("WACC (Agirlikli Sermaye Maliyeti)", wacc_a),
+            ("OPEX Yillik Marji", opex_annual_t3),
+            ("Hedef Brut Kar Marji", target_margin),
+            ("Risk BPS Ayarlamalari", risk_pct),
+            ("Makro Strateji Ayari", macro_pct),
         ]
 
         st.markdown("**Waterfall Breakdown:**")
         running = 0
-        for label, val, typ in waterfall_data:
+        for label, val in waterfall_data:
             running += val
-            color = "+" if val >= 0 else ""
-            st.markdown(f"**{label}:** `{color}{val:.2f}%` -> Kumulatif: `{running:.2f}%`")
+            sign = "+" if val >= 0 else ""
+            st.markdown(f"**{label}:** `{sign}{val:.2f}%` → Kumulatif: `{running:.2f}%`")
 
         st.divider()
-        st.metric("Sistem Onerilen Oran", f"%{system_rate:.2f}", delta=f"Risk BPS: {risk_bps:+d}")
+        st.metric("Sistem Onerilen Oran (Yillik)", f"%{system_rate:.2f}", delta=f"Risk BPS: {risk_bps:+d}")
 
         st.markdown("**Risk BPS Detayi:**")
         bps_df = pd.DataFrame(breakdown, columns=["Parametre", "Deger", "BPS"])
@@ -289,7 +344,7 @@ with tabs[2]:
         st.subheader("Manuel Mudahale (Override)")
         override_rate = st.number_input(
             "Nihai Karar Orani (%)",
-            min_value=0.0, max_value=50.0,
+            min_value=0.0,
             value=float(system_rate), step=0.05,
             help="Yetkili kisi bu orani manuel olarak revize edebilir."
         )
@@ -333,6 +388,9 @@ with tabs[2]:
                 st.session_state.approved_deals.append(deal)
                 st.error("Islem reddedildi ve kayit altina alindi.")
 
+# ══════════════════════════════════════════════
+# TAB 4: AYARLAR / WEIGHTS
+# ══════════════════════════════════════════════
 with tabs[3]:
     st.header("Ayarlar - BPS Agirliklari (Yonetici Paneli)")
     st.caption("Tum baz puan degerleri buradan yonetilebilir. 100 bps = %1")
@@ -380,6 +438,9 @@ with tabs[3]:
     if st.button("Agirliklari Kaydet", type="primary"):
         st.success("BPS agirliklari guncellendi!")
 
+# ══════════════════════════════════════════════
+# TAB 5: ONAYLANAN ISLEMLER
+# ══════════════════════════════════════════════
 with tabs[4]:
     st.header("Onaylanan / Reddedilen Islemler")
     deals = st.session_state.approved_deals
