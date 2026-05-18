@@ -32,7 +32,7 @@ def init_session_state():
         }
     if "weights" not in st.session_state:
         st.session_state.weights = {
-            "risk_low": -50, "risk_mid": 0, "risk_high": 200,
+            "risk_A1": -100, "risk_A2": -50, "risk_B1": 0, "risk_B2": 25, "risk_C1": 50, "risk_C2": 100, "risk_D": 200,
             "maturity_lt90": -50, "maturity_120": 0, "maturity_gt120_per30": 100,
             "payment_weekly": -50, "payment_monthly": 0, "payment_45d": 75,
             "stock_gt6": -75, "stock_4to6": -25, "stock_lt4": 0,
@@ -97,7 +97,7 @@ def calculate_risk_bps(params, weights):
     bps = 0
     breakdown = []
 
-    risk_map = {"Dusuk": weights["risk_low"], "Orta": weights["risk_mid"], "Yuksek": weights["risk_high"]}
+    risk_map = {"A1": weights["risk_A1"], "A2": weights["risk_A2"], "B1": weights["risk_B1"], "B2": weights["risk_B2"], "C1": weights["risk_C1"], "C2": weights["risk_C2"], "D": weights["risk_D"]}
     v = risk_map[params["risk_grade"]]
     bps += v; breakdown.append(("Risk Notu", params["risk_grade"], v))
 
@@ -382,11 +382,12 @@ with tabs[2]:
         st.subheader("Musteri Parametreleri")
         customer_name = st.text_input("Musteri Adi / Kodu", value="ABC Gida Ltd.")
         customer_type = st.selectbox("Musteri Tipi", ["Yeni Musteri", "Tekrar Musteri"])
-        deal_amount = st.number_input("Islem Tutari ($)", min_value=10000, value=500000, step=10000)
+        deal_amount = st.number_input("Islem Tutari (TL)", min_value=10000, value=500000, step=10000)
         maturity_days = st.number_input("Vade (Gun)", min_value=30, max_value=360, value=120, step=15)
 
         st.markdown("---")
-        risk_grade = st.selectbox("Risk Notu", ["Dusuk", "Orta", "Yuksek"])
+        risk_grade = st.selectbox("Risk Notu", ["A1", "A2", "B1", "B2", "C1", "C2", "D"],
+            help="A1:-100 | A2:-50 | B1:0 | B2:+25 | C1:+50 | C2:+100 | D:+200 bps")
         payment_freq = st.selectbox("Odeme Sikligi", ["Haftalik", "Aylik", "45 Gunluk"])
         stock_turnover = st.number_input("Stok Cevrim Hizi (x/yil)", min_value=1.0, max_value=20.0, value=5.0, step=0.5)
 
@@ -501,7 +502,7 @@ with tabs[2]:
                 deal = {
                     "Tarih": datetime.now().strftime("%Y-%m-%d %H:%M"),
                     "Musteri": customer_name, "Tip": customer_type,
-                    "Tutar ($)": deal_amount, "Vade (Gun)": maturity_days,
+                    "Tutar (TL)": deal_amount, "Vade (Gun)": maturity_days,
                     "Vade (Ay)": round(maturity_months, 2),
                     "Kategori": category,
                     "Sistem Aylik Oran (%)": final_monthly_rate,
@@ -518,7 +519,7 @@ with tabs[2]:
                 deal = {
                     "Tarih": datetime.now().strftime("%Y-%m-%d %H:%M"),
                     "Musteri": customer_name, "Tip": customer_type,
-                    "Tutar ($)": deal_amount, "Vade (Gun)": maturity_days,
+                    "Tutar (TL)": deal_amount, "Vade (Gun)": maturity_days,
                     "Vade (Ay)": round(maturity_months, 2),
                     "Kategori": category,
                     "Sistem Aylik Oran (%)": final_monthly_rate,
@@ -542,19 +543,19 @@ with tabs[3]:
     st.subheader("Hedef Gostergeler")
     g1, g2, g3 = st.columns(3)
 
-    total_volume = sum(d["Tutar ($)"] for d in approved) if approved else 0
+    total_volume = sum(d["Tutar (TL)"] for d in approved) if approved else 0
     sales_progress = (total_volume / s4["sales_target"] * 100) if s4["sales_target"] > 0 else 0
 
     if approved:
         df_ap = pd.DataFrame(approved)
-        weighted_maturity = (df_ap["Tutar ($)"] * df_ap["Vade (Gun)"]).sum() / df_ap["Tutar ($)"].sum()
-        weighted_gross = (df_ap["Tutar ($)"] * df_ap["Vade Brut Kar (%)"]).sum() / df_ap["Tutar ($)"].sum()
-        weighted_monthly = (df_ap["Tutar ($)"] * df_ap["Nihai Aylik Oran (%)"]).sum() / df_ap["Tutar ($)"].sum()
+        weighted_maturity = (df_ap["Tutar (TL)"] * df_ap["Vade (Gun)"]).sum() / df_ap["Tutar (TL)"].sum()
+        weighted_gross = (df_ap["Tutar (TL)"] * df_ap["Vade Brut Kar (%)"]).sum() / df_ap["Tutar (TL)"].sum()
+        weighted_monthly = (df_ap["Tutar (TL)"] * df_ap["Nihai Aylik Oran (%)"]).sum() / df_ap["Tutar (TL)"].sum()
     else:
         weighted_maturity = weighted_gross = weighted_monthly = 0
 
     with g1:
-        st.metric("Toplam Onaylanan Hacim", f"${total_volume:,.0f}",
+        st.metric("Toplam Onaylanan Hacim", f"₺{total_volume:,.0f}",
                   delta=f"%{sales_progress:.1f} / Hedef ${s4['sales_target']:,.0f}")
         st.progress(min(sales_progress / 100, 1.0))
         if sales_progress >= 100: st.success("Satis hedefi asildi!")
@@ -608,9 +609,13 @@ with tabs[4]:
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Risk Notu")
-        w5["risk_low"] = st.number_input("Dusuk Risk (bps)", value=w5["risk_low"])
-        w5["risk_mid"] = st.number_input("Orta Risk (bps)", value=w5["risk_mid"])
-        w5["risk_high"] = st.number_input("Yuksek Risk (bps)", value=w5["risk_high"])
+        w5["risk_A1"] = st.number_input("A1 (bps)", value=w5["risk_A1"])
+        w5["risk_A2"] = st.number_input("A2 (bps)", value=w5["risk_A2"])
+        w5["risk_B1"] = st.number_input("B1 (bps)", value=w5["risk_B1"])
+        w5["risk_B2"] = st.number_input("B2 (bps)", value=w5["risk_B2"])
+        w5["risk_C1"] = st.number_input("C1 (bps)", value=w5["risk_C1"])
+        w5["risk_C2"] = st.number_input("C2 (bps)", value=w5["risk_C2"])
+        w5["risk_D"]  = st.number_input("D  (bps)", value=w5["risk_D"])
 
         st.subheader("Vade")
         w5["maturity_lt90"] = st.number_input("<90 Gun (bps)", value=w5["maturity_lt90"])
