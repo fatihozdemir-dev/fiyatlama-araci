@@ -1,4 +1,4 @@
-code = '''import streamlit as st
+import streamlit as st
 import pandas as pd
 from datetime import datetime
 
@@ -8,9 +8,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# ══════════════════════════════════════════════
-# SESSION STATE INIT
-# ══════════════════════════════════════════════
 def init_session_state():
     if "funding_sources" not in st.session_state:
         st.session_state.funding_sources = [
@@ -39,18 +36,15 @@ def init_session_state():
             "maturity_lt90": -50, "maturity_120": 0, "maturity_gt120_per30": 100,
             "payment_weekly": -50, "payment_monthly": 0, "payment_45d": 75,
             "stock_gt6": -75, "stock_4to6": -25, "stock_lt4": 0,
-            # Trendyol kategori BPS - dusuk komisyon = ince marj = fiyati dusuk tut (negatif bps)
-            # Supermarket/FMCG: dusuk komisyon (%8-17) = ince marjli = indirim (-75 bps)
-            # Giyim/Moda: yuksek komisyon (%21+) = yuksek marjli = prim tasiyabilir (+100 bps)
-            "cat_supermarket": -75,       # Supermarket / FMCG (%8-17 komisyon) - en karli
-            "cat_kozmetik": -50,          # Kozmetik & Kisisel Bakim (%12-17) - karli
-            "cat_elektronik": -25,        # Elektronik & Aksesuar (%7-15) - orta-karli
-            "cat_ev_yasam": 0,            # Ev & Yasam (%10-21) - standart
-            "cat_spor": 0,                # Spor & Outdoor (%10-15) - standart
-            "cat_cocuk_bebek": 25,        # Cocuk & Bebek (%16) - orta
-            "cat_kirtasiye": 25,          # Kirtasiye & Ofis (%8-19) - orta
-            "cat_giyim_moda": 100,        # Giyim & Moda (%21+) - en az karli = prim
-            "cat_ayakkabi_canta": 100,    # Ayakkabi & Canta (%21-23) - en az karli = prim
+            "cat_supermarket": -75,
+            "cat_kozmetik": -50,
+            "cat_elektronik": -25,
+            "cat_ev_yasam": 0,
+            "cat_spor": 0,
+            "cat_cocuk_bebek": 25,
+            "cat_kirtasiye": 25,
+            "cat_giyim_moda": 100,
+            "cat_ayakkabi_canta": 100,
             "grace_none": 0, "grace_15d": 30, "grace_30d": 75,
             "pipeline_low": -50, "pipeline_normal": 0, "pipeline_high": 100,
             "funds_in_legal_multiplier": 0.5,
@@ -61,9 +55,6 @@ def init_session_state():
 
 init_session_state()
 
-# Trendyol kategori listesi ve aciklamalari
-# Mantik: Yuksek komisyon = Yuksek marjli kategori = Satici prim tasiyabilir (+bps)
-#          Dusuk komisyon  = Ince marjli kategori   = Fiyati dusuk tut (-bps)
 TRENDYOL_CATEGORIES = {
     "Supermarket / FMCG": {"key": "cat_supermarket", "komisyon": "%8-17", "karlilik": "⭐ Ince Marj - Dusuk"},
     "Kozmetik & Kisisel Bakim": {"key": "cat_kozmetik", "komisyon": "%12-17", "karlilik": "⭐⭐ Orta-Dusuk"},
@@ -76,9 +67,6 @@ TRENDYOL_CATEGORIES = {
     "Ayakkabi & Canta": {"key": "cat_ayakkabi_canta", "komisyon": "%21-23", "karlilik": "⭐⭐⭐⭐⭐ En Yuksek Marj"},
 }
 
-# ══════════════════════════════════════════════
-# HELPER FUNCTIONS
-# ══════════════════════════════════════════════
 def get_usd_amount(amount, currency, fx_rate):
     if currency == "TL":
         return amount / fx_rate if fx_rate > 0 else 0
@@ -154,9 +142,6 @@ def calculate_risk_bps(params, weights):
 def bps_to_pct(bps):
     return round(bps / 100, 4)
 
-# ══════════════════════════════════════════════
-# TABS
-# ══════════════════════════════════════════════
 tabs = st.tabs([
     "Borclanma Kaynaklari & WACC",
     "Stratejik Hedefler",
@@ -435,11 +420,13 @@ with tabs[2]:
     risk_pct3 = bps_to_pct(risk_bps)
 
     maturity_months = maturity_days / 30
+    # Risk ve legal BPS'leri vadeye bolunmeden dogrudan aylik etkiye donusturulur
     risk_monthly_adj = round(risk_pct3 / maturity_months, 4) if maturity_months > 0 else 0
     legal_monthly_adj = round(legal_pct_val / maturity_months, 4) if maturity_months > 0 else 0
     macro_monthly_adj = round(macro_pct3 / maturity_months, 4) if maturity_months > 0 else 0
 
-    final_monthly_rate = round(base_cost_monthly3 + target_monthly_rate3 + risk_monthly_adj + legal_monthly_adj + macro_monthly_adj, 4)
+    # DUZELTME: Nihai aylik oran = Base Cost + Risk + Legal + Makro (Hedef Brut Kar DAHIL DEGIL)
+    final_monthly_rate = round(base_cost_monthly3 + risk_monthly_adj + legal_monthly_adj + macro_monthly_adj, 4)
     final_annual_rate = round(final_monthly_rate * 12, 4)
     vade_gross_pct = round(final_monthly_rate * maturity_months, 4)
 
@@ -448,7 +435,6 @@ with tabs[2]:
 
         waterfall = [
             ("Base Cost Aylik (WACC+OPEX)", base_cost_monthly3, "maliyet"),
-            ("Hedef Brut Kar Aylik Payi", target_monthly_rate3, "hedef"),
             ("Risk BPS Aylik Etkisi", risk_monthly_adj, "risk"),
             ("Funds in Legal Primi Aylik", legal_monthly_adj, "legal"),
             ("Makro Strateji Aylik Etkisi", macro_monthly_adj, "makro"),
@@ -458,7 +444,7 @@ with tabs[2]:
         for label, val, kind in waterfall:
             running += val
             sign = "+" if val >= 0 else ""
-            icons = {"maliyet": "🔵", "hedef": "🟢", "risk": "🔴" if val > 0 else "🟢",
+            icons = {"maliyet": "🔵", "risk": "🔴" if val > 0 else "🟢",
                      "legal": "🔴" if val > 0 else "⚪", "makro": "🟡"}
             extra = ""
             if kind == "risk":
@@ -486,6 +472,13 @@ with tabs[2]:
         bps_df = pd.DataFrame(breakdown, columns=["Parametre", "Deger", "BPS"])
         bps_df["BPS"] = bps_df["BPS"].apply(lambda x: f"{x:+d}")
         st.dataframe(bps_df, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.subheader("Hedef Karsilastirma")
+        st.info(
+            f"**Strateji Hedefi:** Aylik %{target_monthly_rate3:.3f} → {s3['avg_maturity_days']}g vade brut kar: %{s3['target_portfolio_gross_pct']:.1f}\n\n"
+            f"**Bu Islem:** Aylik %{final_monthly_rate:.3f} → {maturity_days}g vade brut kar: %{vade_gross_pct:.2f}"
+        )
 
         st.divider()
         st.subheader("Manuel Override & Onay")
@@ -674,10 +667,3 @@ with tabs[4]:
 
     if st.button("Agirliklari Kaydet", type="primary"):
         st.success("Tum parametreler guncellendi!")
-'''
-
-with open("dynamic_pricing_tool.py", "w", encoding="utf-8") as f:
-    f.write(code)
-
-print("Dosya olusturuldu!")
-print(f"Satir sayisi: {len(code.splitlines())}")
